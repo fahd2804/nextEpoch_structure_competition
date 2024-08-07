@@ -43,7 +43,7 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim)
         )
         self.conv1 = nn.Conv2d(embedding_dim, embedding_dim//2, kernel_size=3, padding=1)
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
         
         self.module2 = nn.Sequential(
             ResBlock(embedding_dim//2),
@@ -52,7 +52,7 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim//2)
         )
         self.conv2 = nn.Conv2d(embedding_dim//2, embedding_dim//4, kernel_size=3, padding=1)
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
         
         self.module3 = nn.Sequential(
             ResBlock(embedding_dim//4),
@@ -61,7 +61,7 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim//4)
         )
         self.conv3 = nn.Conv2d(embedding_dim//4, embedding_dim//8, kernel_size=3, padding=1)
-        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
         
         self.module4 = nn.Sequential(
             ResBlock(embedding_dim//8),
@@ -70,7 +70,7 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim//8)
         )
         self.conv4 = nn.Conv2d(embedding_dim//8, embedding_dim//16, kernel_size=3, padding=1)
-        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
 
         self.upsample4 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.conv5 = nn.Conv2d(embedding_dim//16, embedding_dim//8, kernel_size=3, padding=1)
