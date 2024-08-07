@@ -43,7 +43,7 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim)
         )
         self.conv1 = nn.Conv2d(embedding_dim, embedding_dim//2, kernel_size=3, padding=1)
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)  # Adjusted padding
         
         self.module2 = nn.Sequential(
             ResBlock(embedding_dim//2),
@@ -52,7 +52,7 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim//2)
         )
         self.conv2 = nn.Conv2d(embedding_dim//2, embedding_dim//4, kernel_size=3, padding=1)
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)  # Adjusted padding
         
         self.module3 = nn.Sequential(
             ResBlock(embedding_dim//4),
@@ -61,43 +61,37 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim//4)
         )
         self.conv3 = nn.Conv2d(embedding_dim//4, embedding_dim//8, kernel_size=3, padding=1)
-        self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
+        # Removed one pooling layer
         
-        self.module4 = nn.Sequential(
-            ResBlock(embedding_dim//8),
-            ResBlock(embedding_dim//8),
-            ResBlock(embedding_dim//8),
-            ResBlock(embedding_dim//8)
-        )
-        self.conv4 = nn.Conv2d(embedding_dim//8, embedding_dim//16, kernel_size=3, padding=1)
-        self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2, padding=1)
-
-        self.upsample4 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.conv5 = nn.Conv2d(embedding_dim//16, embedding_dim//8, kernel_size=3, padding=1)
-        self.upsample3 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.conv6 = nn.Conv2d(embedding_dim//8, embedding_dim//4, kernel_size=3, padding=1)
         self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.conv7 = nn.Conv2d(embedding_dim//4, embedding_dim//2, kernel_size=3, padding=1)
-        self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.conv8 = nn.Conv2d(embedding_dim//2, 1, kernel_size=3, padding=1)
+        self.conv4 = nn.Conv2d(embedding_dim//8, embedding_dim//4, kernel_size=3, padding=1)
+        
+        self.upsample3 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.conv5 = nn.Conv2d(embedding_dim//4, embedding_dim//2, kernel_size=3, padding=1)
+        
+        self.upsample4 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.conv6 = nn.Conv2d(embedding_dim//2, embedding_dim, kernel_size=3, padding=1)
+        
+        self.conv7 = nn.Conv2d(embedding_dim, 1, kernel_size=3, padding=1)
 
     def forward(self, x):
         _, m = self.embedding(x) # (N, d, L, L)
         
-        m = self.pool1(self.conv1(self.module1(m)))
-        m = self.pool2(self.conv2(self.module2(m)))
-        m = self.pool3(self.conv3(self.module3(m)))
-        m = self.pool4(self.conv4(self.module4(m)))
+        m = self.pool1(self.conv1(self.module1(m)))  # (N, embedding_dim//2, L/2, L/2)
+        m = self.pool2(self.conv2(self.module2(m)))  # (N, embedding_dim//4, L/4, L/4)
+        m = self.conv3(self.module3(m))  # (N, embedding_dim//8, L/4, L/4)
         
-        m = self.upsample4(m)
-        m = self.conv5(m)
-        m = self.upsample3(m)
-        m = self.conv6(m)
-        m = self.upsample2(m)
-        m = self.conv7(m)
-        m = self.upsample1(m)
-        m = self.conv8(m)
-
-        output = m.squeeze(1) # output is (N, L, L)
+        m = self.upsample2(m)  # (N, embedding_dim//8, L/2, L/2)
+        m = self.conv4(m)  # (N, embedding_dim//4, L/2, L/2)
+        
+        m = self.upsample3(m)  # (N, embedding_dim//4, L, L)
+        m = self.conv5(m)  # (N, embedding_dim//2, L, L)
+        
+        m = self.upsample4(m)  # (N, embedding_dim//2, 2L, 2L)
+        m = self.conv6(m)  # (N, embedding_dim, 2L, 2L)
+        
+        m = self.conv7(m)  # (N, 1, 2L, 2L)
+        
+        output = m.squeeze(1)  # output is (N, 2L, 2L)
         output = 0.5 * (output.permute(0, 2, 1) + output)
         return output
