@@ -12,6 +12,7 @@ train_loader, val_loader, test_loader = get_dataloaders(batch_size = 8, max_leng
 
 # Init model, loss function, optimizer
 model = RNA_net(embedding_dim=64)
+model.to(device)
 criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([300]))
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
@@ -29,8 +30,8 @@ for epoch in range(10):
 
     for batch in train_loader:
 
-        x = batch["sequence"] # (N, L)
-        y = batch['structure'] # (N, L, L)
+        x = batch["sequence"].to(device)  # (N, L)
+        y = batch['structure'].to(device)  # (N, L, L)
 
         y_pred = model(x)
 
@@ -44,8 +45,8 @@ for epoch in range(10):
         f1_train += compute_f1(y_pred, y)
 
     for batch in val_loader:
-        x = batch["sequence"] # (N, L)
-        y = batch['structure'] # (N, L, L)
+        x = batch["sequence"].to(device)  # (N, L)
+        y = batch['structure'].to(device)  # (N, L, L)
 
         y_pred = model(x)
 
