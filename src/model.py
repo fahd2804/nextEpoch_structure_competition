@@ -43,8 +43,8 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim)
         )
         self.conv1 = nn.Conv2d(embedding_dim, embedding_dim // 2, kernel_size=3, padding=1)
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)  # Reducing size by half
-        
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)  # Reduces size by half
+
         self.module2 = nn.Sequential(
             ResBlock(embedding_dim // 2),
             ResBlock(embedding_dim // 2),
@@ -52,8 +52,8 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim // 2)
         )
         self.conv2 = nn.Conv2d(embedding_dim // 2, embedding_dim // 4, kernel_size=3, padding=1)
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)  # Reducing size by half
-        
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)  # Further reduces size by half
+
         self.module3 = nn.Sequential(
             ResBlock(embedding_dim // 4),
             ResBlock(embedding_dim // 4),
@@ -61,30 +61,31 @@ class RNA_net(nn.Module):
             ResBlock(embedding_dim // 4)
         )
         self.conv3 = nn.Conv2d(embedding_dim // 4, embedding_dim // 8, kernel_size=3, padding=1)
-        
+
+        # Upsampling layers to match the original input size
         self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.conv4 = nn.Conv2d(embedding_dim // 8, embedding_dim // 4, kernel_size=3, padding=1)
-        
+        self.conv_up1 = nn.Conv2d(embedding_dim // 8, embedding_dim // 4, kernel_size=3, padding=1)
+
         self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.conv5 = nn.Conv2d(embedding_dim // 4, embedding_dim // 2, kernel_size=3, padding=1)
-        
-        self.conv6 = nn.Conv2d(embedding_dim // 2, embedding_dim, kernel_size=3, padding=1)
+        self.conv_up2 = nn.Conv2d(embedding_dim // 4, embedding_dim // 2, kernel_size=3, padding=1)
+
+        self.conv_final = nn.Conv2d(embedding_dim // 2, 1, kernel_size=3, padding=1)
 
     def forward(self, x):
         _, m = self.embedding(x)  # (N, d, L, L)
-        
+
         m = self.pool1(self.conv1(self.module1(m)))  # (N, embedding_dim//2, L/2, L/2)
         m = self.pool2(self.conv2(self.module2(m)))  # (N, embedding_dim//4, L/4, L/4)
         m = self.conv3(self.module3(m))  # (N, embedding_dim//8, L/4, L/4)
-        
+
         m = self.upsample1(m)  # (N, embedding_dim//8, L/2, L/2)
-        m = self.conv4(m)  # (N, embedding_dim//4, L/2, L/2)
-        
+        m = self.conv_up1(m)  # (N, embedding_dim//4, L/2, L/2)
+
         m = self.upsample2(m)  # (N, embedding_dim//4, L, L)
-        m = self.conv5(m)  # (N, embedding_dim//2, L, L)
-        
-        m = self.conv6(m)  # (N, embedding_dim, L, L)
-        
-        output = m.squeeze(1)  # output is (N, L, L)
+        m = self.conv_up2(m)  # (N, embedding_dim//2, L, L)
+
+        m = self.conv_final(m)  # (N, 1, L, L)
+
+        output = m.squeeze(1)  # (N, L, L)
         output = 0.5 * (output.permute(0, 2, 1) + output)
         return output
