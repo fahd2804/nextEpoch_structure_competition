@@ -1,76 +1,122 @@
-from src.data import get_dataloaders
-from src.model import RNA_net
-from src.util import compute_f1, compute_precision, compute_recall, plot_structures
-from src.submission_formatter import format_submission
-
 import torch
 import torch.nn as nn
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class RNA_embedding(nn.Module):
 
-train_loader, val_loader, test_loader = get_dataloaders(batch_size = 8, max_length=70, split=0.8, max_data=1000)
+    '''
+    This class is a simple embedding layer for RNA sequences. 
 
-# Init model, loss function, optimizer
-model = RNA_net(embedding_dim=64)
-model.to(device)
-criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([300]))
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    input:
+    - embedding_dim: int, dimension of the embedding space
+    - vocab_size: int, size of the vocabulary (number of different nucleotides)
 
-# Training loop
-train_losses = []
-valid_losses = []
-f1s_train = []
-f1s_valid = []
-for epoch in range(10):
+    output:
+    - x: tensor, (N, embedding_dim, L, L), where N is the batch size, L is the length of the sequence 
+    '''
 
-    loss_train = 0.0
-    f1_train = 0.0
-    loss_valid = 0.0
-    f1_valid = 0.0
+    def __init__(self, embedding_dim, vocab_size=5):
+        super(RNA_embedding, self).__init__()
 
-    for batch in train_loader:
+        self.table_embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.fc_input = nn.Linear(embedding_dim*2, embedding_dim)
 
-        x = batch["sequence"].to(device)  # (N, L)
-        y = batch['structure'].to(device)  # (N, L, L)
+    def forward(self, x): # x is (N, L) -> embedded as sequence of integer
 
-        y_pred = model(x)
+        # Sequence representation
+        s = self.table_embedding(x)                         # (N, L, embedding_dim)
 
-        loss = criterion(y_pred, y)
-        optimizer.zero_grad()
-        loss.backward()
+        # Outer concatenation to get matrix representation
+        m = s.unsqueeze(2).repeat(1, 1, s.shape[1], 1)      # (N, L, L, embedding_dim)
+        m = torch.cat((m, m.permute(0, 2, 1, 3)), dim=-1)   # (N, L, L, 2*embedding_dim)
 
-        optimizer.step()
+        # Bring back to embedding dimension
+        m = self.fc_input(m)                                # (N, L, L, embedding_dim)    
 
-        loss_train += loss.item()
-        f1_train += compute_f1(y_pred, y)
+        m = m.permute(0, 3, 1, 2)                           # (N, embedding_dim , L, L)   
 
-    for batch in val_loader:
-        x = batch["sequence"].to(device)  # (N, L)
-        y = batch['structure'].to(device)  # (N, L, L)
+        return s, m
 
-        y_pred = model(x)
+class ResBlock(nn.Module):
 
-        loss = criterion(y_pred, y)
+    def __init__(self, in_channel):
+        super(ResBlock, self).__init__()
 
-        loss_valid += loss.item()
-        f1_valid += compute_f1(y_pred, y)
+        self.conv1 = nn.Conv2d(in_channel, in_channel, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(in_channel, in_channel, kernel_size=3, padding=1)
 
-    train_losses.append(loss_train/len(train_loader))
-    valid_losses.append(loss_valid/len(val_loader))
+        self.batch_norm1 = nn.BatchNorm2d(num_features=in_channel)
+        self.batch_norm2 = nn.BatchNorm2d(num_features=in_channel)
 
-    f1s_train.append(f1_train/len(train_loader))
-    f1s_valid.append(f1_valid/len(val_loader))
+        self.relu = nn.ReLU()
 
-    print(f"Epoch {epoch}, F1 train: {f1s_train[-1]:.2f}, F1 valid: {f1s_valid[-1]:.2f}")
+    def forward(self, input):
+
+        x = self.batch_norm1(self.conv1(input))
+
+        x = self.relu(x)
+
+        x = self.batch_norm2(self.conv2(x))
+
+        x += input
+
+        return x
+
+# This is the class to be developed !
+class RNA_net(nn.Module):
+
+    def __init__(self, embedding_dim):
+        super(RNA_net, self).__init__()
+
+        self.embedding = RNA_embedding(embedding_dim)
+
+        self.module1 = nn.Sequential(
+                                        ResBlock(embedding_dim),
+                                        ResBlock(embedding_dim),
+                                        ResBlock(embedding_dim),
+                                        ResBlock(embedding_dim),
+                                    )
+        self.conv1 = nn.Conv2d(embedding_dim, embedding_dim//2, kernel_size=3, padding=1)
+        
+        self.module2 = nn.Sequential(
+                                        ResBlock(embedding_dim//2),
+                                        ResBlock(embedding_dim//2),
+                                        ResBlock(embedding_dim//2),
+                                        ResBlock(embedding_dim//2),
+                                    )
+        self.conv2 = nn.Conv2d(embedding_dim//2, embedding_dim//4, kernel_size=3, padding=1)
+        
+        self.module3 = nn.Sequential(
+
+                                        ResBlock(embedding_dim//4),
+                                        ResBlock(embedding_dim//4),
+                                        ResBlock(embedding_dim//4),
+                                        ResBlock(embedding_dim//4),
+                                    )
+        self.conv3 = nn.Conv2d(embedding_dim//4, embedding_dim//8, kernel_size=3, padding=1)
+        
+        self.module4 = nn.Sequential(
+
+                                        ResBlock(embedding_dim//8),
+                                        ResBlock(embedding_dim//8),
+                                        ResBlock(embedding_dim//8),
+                                        ResBlock(embedding_dim//8),
+                                    )
+        self.conv4 = nn.Conv2d(embedding_dim//8, 1, kernel_size=3, padding=1)
 
 
-# Validation loop
 
-# Test loop
-structures = []
-for sequence in test_loader[1]:
-    # Replace with your model prediction !
-    structure = (model(sequence.unsqueeze(0)).squeeze(0)>0.5).type(torch.int) # Has to be shape (L, L) ! 
-    structures.append(structure)
+        # Your layers here
 
-format_submission(test_loader[0], test_loader[1], structures, 'test_pred.csv')
+    def forward(self, x):
+        # x is (N, L)
+        _, m = self.embedding(x) # (N, d, L, L)
+
+        m = self.conv1(self.module1(m)) # (N, 1, L, L)
+        m = self.conv2(self.module2(m))
+        m = self.conv3(self.module3(m))
+        m = self.conv4(self.module4(m))
+
+
+        output = m.squeeze(1) # output is (N, L, L)
+        output = 0.5*(output.permute(0,2,1) + output)
+        return output
