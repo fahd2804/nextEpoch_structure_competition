@@ -111,7 +111,7 @@ class RNA_net(nn.Module):
                                         ResBlock(embedding_dim//16),
                                         ResBlock(embedding_dim//16),
                                     )
-         self.conv5 = nn.Conv2d(embedding_dim//16, 1, kernel_size=3, padding=1)
+        self.conv5 = nn.Conv2d(embedding_dim//16, 1, kernel_size=3, padding=1)
 
         
 
