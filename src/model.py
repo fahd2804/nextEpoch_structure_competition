@@ -1,122 +1,213 @@
+
 import torch
+
+import numpy as np
 import torch.nn as nn
+from torch import cuda
+import torch.nn.functional as F
 
-class RNA_embedding(nn.Module):
 
-    '''
-    This class is a simple embedding layer for RNA sequences. 
+class MyBatchNorm2d(nn.BatchNorm2d):
+    """
+    Re-implementing the BatchNorm2d to exclude the paddings from the calculation
+    Originated from [https://github.com/ptrblck/pytorch_misc/blob/master/batch_norm_manual.py]
+    """
+    def __init__(self, num_features, eps=1e-5, momentum=0.1,
+                 affine=True, track_running_stats=True, padding_value=-1):
+        super(MyBatchNorm2d, self).__init__(
+            num_features, eps, momentum, affine, track_running_stats)
+        self.padding_value = padding_value
+        
+    def forward(self, input):
+        self._check_input_dim(input)
 
-    input:
-    - embedding_dim: int, dimension of the embedding space
-    - vocab_size: int, size of the vocabulary (number of different nucleotides)
+        exponential_average_factor = 0.0
 
-    output:
-    - x: tensor, (N, embedding_dim, L, L), where N is the batch size, L is the length of the sequence 
-    '''
+        if self.training and self.track_running_stats:
+            if self.num_batches_tracked is not None:
+                self.num_batches_tracked += 1
+                if self.momentum is None:  # use cumulative moving average
+                    exponential_average_factor = 1.0 / float(self.num_batches_tracked)
+                else:  # use exponential moving average
+                    exponential_average_factor = self.momentum
 
-    def __init__(self, embedding_dim, vocab_size=5):
-        super(RNA_embedding, self).__init__()
+        mask = (input!=self.padding_value).float()
+        # calculate running estimates
+        if self.training:        
+            input = input * mask # Make the padding 0 if it's not already
+            mean = input.sum(dim=(0, 2, 3)) / mask.sum(dim=(0, 2, 3))
+            m = mean[None, :, None, None]
+            var = torch.sum(((input - m)*mask) ** 2, dim=(0, 2, 3)) / mask.sum(dim=(0, 2, 3))
 
-        self.table_embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.fc_input = nn.Linear(embedding_dim*2, embedding_dim)
+            n = input.numel() / input.size(1)
+            with torch.no_grad():
+                self.running_mean = exponential_average_factor * mean\
+                    + (1 - exponential_average_factor) * self.running_mean
+                # update running_var with unbiased var
+                self.running_var = exponential_average_factor * var * n / (n - 1)\
+                    + (1 - exponential_average_factor) * self.running_var
+        else:
+            mean = self.running_mean
+            var = self.running_var
 
-    def forward(self, x): # x is (N, L) -> embedded as sequence of integer
+        input = (input - mean[None, :, None, None]) / (torch.sqrt(var[None, :, None, None] + self.eps))
+        if self.affine:
+            input = input * self.weight[None, :, None, None] + self.bias[None, :, None, None]
 
-        # Sequence representation
-        s = self.table_embedding(x)                         # (N, L, embedding_dim)
-
-        # Outer concatenation to get matrix representation
-        m = s.unsqueeze(2).repeat(1, 1, s.shape[1], 1)      # (N, L, L, embedding_dim)
-        m = torch.cat((m, m.permute(0, 2, 1, 3)), dim=-1)   # (N, L, L, 2*embedding_dim)
-
-        # Bring back to embedding dimension
-        m = self.fc_input(m)                                # (N, L, L, embedding_dim)    
-
-        m = m.permute(0, 3, 1, 2)                           # (N, embedding_dim , L, L)   
-
-        return s, m
+        return input
+    
 
 class ResBlock(nn.Module):
-
-    def __init__(self, in_channel):
+    def __init__(self, in_channels, out_channels, stride=1, padding_value=-1):
         super(ResBlock, self).__init__()
+        self.normal = nn.Sequential(
+            # nn.Conv2d(in_channels, out_channels, 3, stride=stride, bias=False, padding=1),
+            # MyBatchNorm2d(out_channels, padding_value=padding_value),
+            # nn.LeakyReLU(),
+            # nn.Conv2d(out_channels, out_channels, 3, stride=1, bias=False, padding=1),
+            # MyBatchNorm2d(out_channels, padding_value=padding_value),
+            nn.Conv2d(in_channels, out_channels, 3, stride=stride, bias=False, padding=1),
+            # nn.Dropout(.5),
+            nn.BatchNorm2d(out_channels),
+            nn.LeakyReLU(),
 
-        self.conv1 = nn.Conv2d(in_channel, in_channel, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(in_channel, in_channel, kernel_size=3, padding=1)
+            nn.Conv2d(out_channels, out_channels, 3, stride=1, bias=False, padding=2, dilation=2),
+            # nn.Dropout(.5),
+            nn.BatchNorm2d(out_channels),
+            nn.LeakyReLU(),
 
-        self.batch_norm1 = nn.BatchNorm2d(num_features=in_channel)
-        self.batch_norm2 = nn.BatchNorm2d(num_features=in_channel)
+            nn.Conv2d(out_channels, out_channels, 3, stride=1, bias=False, padding=4, dilation=4),
+            # nn.Dropout(.5),
+            nn.BatchNorm2d(out_channels),
+        )
 
-        self.relu = nn.ReLU()
 
-    def forward(self, input):
 
-        x = self.batch_norm1(self.conv1(input))
+    def forward(self, x, mode=0):
+        x1 = self.normal(x)
+        if mode == 0:
+            return F.leaky_relu(x1 + x)
+        else: # mode == 1 or 2 (softmax on -1 or -2 dim)
+            return F.softmax(x1 + x, dim=-mode)
 
-        x = self.relu(x)
 
-        x = self.batch_norm2(self.conv2(x))
+class ResNet(torch.nn.Module):
+    def __init__(self, padding_value=-1):
+        super(ResNet, self).__init__()
 
-        x += input
+        self.conv = nn.Sequential(
+            nn.Conv2d(8, 32, 3, padding=1, bias=False),
+            # nn.Dropout(.5),
+            MyBatchNorm2d(32, padding_value=padding_value),
+            nn.LeakyReLU(),
+            
+            nn.Conv2d(32, 32, 3, padding=1, bias=False),
+            # nn.Dropout(.5),
+            MyBatchNorm2d(32, padding_value=padding_value),
+            nn.LeakyReLU(),
 
-        return x
-
-# This is the class to be developed !
-class RNA_net(nn.Module):
-
-    def __init__(self, embedding_dim):
-        super(RNA_net, self).__init__()
-
-        self.embedding = RNA_embedding(embedding_dim)
-
-        self.module1 = nn.Sequential(
-                                        ResBlock(embedding_dim),
-                                        ResBlock(embedding_dim),
-                                        ResBlock(embedding_dim),
-                                        ResBlock(embedding_dim),
-                                    )
-        self.conv1 = nn.Conv2d(embedding_dim, embedding_dim//2, kernel_size=3, padding=1)
+            ResBlock(32, 32, padding_value=padding_value),
+            ResBlock(32, 32, padding_value=padding_value),
+            # ResBlock(32, 32, padding_value=padding_value),
+            # ResBlock(32, 32, padding_value=padding_value),
+            # ResBlock(32, 32, padding_value=padding_value),
+            # ResBlock(32, 32, padding_value=padding_value),
+            # ResBlock(32, 32, padding_value=padding_value),
+            # ResBlock(32, 32, padding_value=padding_value),
+            # ResBlock(32, 32, padding_value=padding_value),
+            # ResBlock(32, 32, padding_value=padding_value)
+            )
         
-        self.module2 = nn.Sequential(
-                                        ResBlock(embedding_dim//2),
-                                        ResBlock(embedding_dim//2),
-                                        ResBlock(embedding_dim//2),
-                                        ResBlock(embedding_dim//2),
-                                    )
-        self.conv2 = nn.Conv2d(embedding_dim//2, embedding_dim//4, kernel_size=3, padding=1)
+        self.conv_shared = ResBlock(32, 32, padding_value=padding_value)
         
-        self.module3 = nn.Sequential(
+        self.readout = nn.Sequential(
+            nn.Conv2d(32, 2, 1, bias=False),
+            MyBatchNorm2d(2, padding_value=padding_value),
+            nn.LeakyReLU(),
 
-                                        ResBlock(embedding_dim//4),
-                                        ResBlock(embedding_dim//4),
-                                        ResBlock(embedding_dim//4),
-                                        ResBlock(embedding_dim//4),
-                                    )
-        self.conv3 = nn.Conv2d(embedding_dim//4, embedding_dim//8, kernel_size=3, padding=1)
+            nn.Conv2d(2, 1, 1),
+        )
+    
+    def forward(self, x, test=False, repeat=None):
+        n = x.size(-1)
+        if repeat is None:
+            repeat = 8 - min((x.shape[-1])//100, 4)
+        outputs = []
         
-        self.module4 = nn.Sequential(
+        mask = x[:, -1].clone().unsqueeze(1)
+        mask[mask==1] = -1000
+        shared_x = self.conv(x)
 
-                                        ResBlock(embedding_dim//8),
-                                        ResBlock(embedding_dim//8),
-                                        ResBlock(embedding_dim//8),
-                                        ResBlock(embedding_dim//8),
-                                    )
-        self.conv4 = nn.Conv2d(embedding_dim//8, 1, kernel_size=3, padding=1)
+        # mode = [0, 0, 1, 0, 0, 2]  # Alternating between softmax and relu
+        # mode = [1, 2, 1, 2, 1, 2] # Only softmax
+        mode = [0, 0, 0, 0, 0, 0] # Always relu
+        for i in range(repeat):
+            shared_x = self.conv_shared(shared_x, mode=mode[i%6])
+            
+            out = self.readout(shared_x)
+            out = out + mask
+            out = 0.5*(out + out.transpose(-1, -2))
+            # out = F.sigmoid(out)
+            out = F.softmax(out, dim=-1)
+
+            # We need softmax at the end due to having binary matrix at the end
+            # sum of each row == 1
+            
+            outputs.append(out)
+        if test:
+            return out.view(-1, 1, n, n)
+        return torch.cat(outputs, dim=0)
 
 
+class ResNetUnrolled(torch.nn.Module):
+    def __init__(self, padding_value=-1):
+        super(ResNetUnrolled, self).__init__()
 
-        # Your layers here
+        self.conv = nn.Sequential(
+            nn.Conv2d(8, 32, 3, padding=1, bias=False),
+            MyBatchNorm2d(32, padding_value=padding_value),
+            nn.LeakyReLU(),
+            
+            nn.Conv2d(32, 32, 3, padding=1, bias=False),
+            MyBatchNorm2d(32, padding_value=padding_value),
+            nn.LeakyReLU(),
+            )
+        
+        self.conv_shared = nn.ModuleList(ResBlock(32, 32, padding_value=padding_value) for i in range(4)) 
+        
+        self.readout = nn.Sequential(
+            nn.Conv2d(32, 2, 1, bias=False),
+            MyBatchNorm2d(2, padding_value=padding_value),
+            nn.LeakyReLU(),
 
-    def forward(self, x):
-        # x is (N, L)
-        _, m = self.embedding(x) # (N, d, L, L)
+            nn.Conv2d(2, 1, 1),
+        )
+    
+    def forward(self, x, test=False, repeat=None):
+        n = x.size(-1)
+        if repeat is None:
+            repeat = 8 - min((x.shape[-1])//100, 4)
+        outputs = []
+        
+        mask = x[:, -1].clone().unsqueeze(1)
+        mask[mask==1] = -1000
+        shared_x = self.conv(x)
 
-        m = self.conv1(self.module1(m)) # (N, 1, L, L)
-        m = self.conv2(self.module2(m))
-        m = self.conv3(self.module3(m))
-        m = self.conv4(self.module4(m))
+        # mode = [0, 0, 1, 0, 0, 2] 
+        # mode = [0, 0, 0, 0, 0, 0] # Always relu
 
+        for i, layer in enumerate(self.conv_shared):
+            shared_x = layer(shared_x, mode=0) # always with relu
+        
+        out = self.readout(shared_x)
+        out = out + mask
+        out = 0.5*(out + out.transpose(-1, -2))
+        out1 = F.softmax(out, dim=-1)
+        out2 = F.softmax(out, dim=-2)
+        out = out1+out2
 
-        output = m.squeeze(1) # output is (N, L, L)
-        output = 0.5*(output.permute(0,2,1) + output)
-        return output
+        # We need softmax at the end due to having binary matrix at the end
+        # sum of each row == 1
+        return out.view(-1, 1, n, n)
+    
+  
