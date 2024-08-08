@@ -30,7 +30,7 @@ valid_losses = []
 f1s_train = []
 f1s_valid = []
 
-for epoch in range(8):
+for epoch in range(20):
     loss_train = 0.0
     f1_train = 0.0
     loss_valid = 0.0
