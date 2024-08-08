@@ -104,6 +104,16 @@ class RNA_net(nn.Module):
         self.conv4 = nn.Conv2d(embedding_dim//8, 1, kernel_size=3, padding=1)
 
 
+       self.module5 = nn.Sequential(
+
+                                        ResBlock(embedding_dim//16),
+                                        ResBlock(embedding_dim//16),
+                                        ResBlock(embedding_dim//16),
+                                        ResBlock(embedding_dim//16),
+                                    )
+        self.conv5 = nn.Conv2d(embedding_dim//16, 1, kernel_size=3, padding=1)
+
+        
 
         # Your layers here
 
@@ -115,7 +125,7 @@ class RNA_net(nn.Module):
         m = self.conv2(self.module2(m))
         m = self.conv3(self.module3(m))
         m = self.conv4(self.module4(m))
-
+        m = self.conv5(self.module4(m))
 
         output = m.squeeze(1) # output is (N, L, L)
         output = 0.5*(output.permute(0,2,1) + output)
