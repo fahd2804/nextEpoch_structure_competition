@@ -10,11 +10,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 train_loader, val_loader, test_loader = get_dataloaders(batch_size = 8, max_length=70, split=0.8, max_data=1000)
 
-model = RNA_net(embedding_dim=64).to(device)
+model = RNA_net(embedding_dim=128).to(device)
 
 criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([300])).to(device)
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
 
 # Training loop
 train_losses = []
